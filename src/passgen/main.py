@@ -13,36 +13,6 @@ def parse_cli_args():
     args = parser.parse_args()
     return args
 
-def get_length():
-    while True:
-        try:
-            user_input = input("Password length (default 16): ").strip()
-            if not user_input:
-                length = 16
-            else:
-                length = int(user_input)
-            if length < 4:
-                print("Password must be at least 4 characters long")
-                continue
-
-            return length
-
-        except ValueError:
-            print("Invalid input. Please enter a number.")
-
-def user_choices():
-    exclude_ambiguous = input("Exclude ambiguous characters (y/n, default y): ").strip().lower()
-    if not exclude_ambiguous:
-        exclude_ambiguous = True
-    elif exclude_ambiguous == "y":
-        exclude_ambiguous = True
-    elif exclude_ambiguous == "n":
-        exclude_ambiguous = False
-    else:
-        print("Invalid input. Please enter y or n.")
-        return user_choices()
-    return exclude_ambiguous
-
 def user_password_count():
     while True:
         try:
@@ -57,8 +27,6 @@ def user_password_count():
             return count
         except ValueError:
             print("Invalid input. Please enter a number.")
-
-
 
 def get_charset(exclude_ambiguous=True):
     chars = string.ascii_letters + string.digits + string.punctuation
