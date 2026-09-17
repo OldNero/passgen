@@ -1,53 +1,20 @@
-import sys
-import secrets
-import string
 import argparse
 import json
-from pathlib import Path
+import secrets
+import string
+import sys
 import time
+from pathlib import Path
+
+try:
+    from passgen.picker import pick_and_copy
+except ModuleNotFoundError:
+    from picker import pick_and_copy
 
 # History file config
 HISTORY_FILE = Path.home() / ".passgen_history.json"
 MAX_HISTORY = 25
 AMBIGUOUS = "il1Lo0O|"
-
-# CLI arg parser setup
-parser = argparse.ArgumentParser()
-parser.add_argument(
-    "-l", "--length", type=int, default=16, help="Password length in characters."
-)
-parser.add_argument(
-    "-c", "--count", type=int, default=1, help="The number of passwords generated."
-)
-parser.add_argument(
-    "-na", "--no-ambiguous", action="store_true", help="Removes ambiguous characters."
-)
-parser.add_argument(
-    "-nn", "--no-numbers", action="store_true", help="Removes numbers from password."
-)
-parser.add_argument(
-    "-nl", "--no-letters", action="store_true", help="Removes letters from password."
-)
-parser.add_argument(
-    "-ns",
-    "--no-specials",
-    action="store_true",
-    help="Removes special characters from password.",
-)
-parser.add_argument(
-    "-H",
-    "--history",
-    action="store_true",
-    help=f"Show password history. Max {MAX_HISTORY}.",
-)
-parser.add_argument(
-    "--clear-history", action="store_true", help="Clear saved password history."
-)
-parser.add_argument(
-    "-m", "--comment", type=str, default="", help="Comment or label for the password."
-)
-
-args = parser.parse_args()
 
 
 def format_time_ago(timestamp: float) -> str:
@@ -70,11 +37,12 @@ def format_time_ago(timestamp: float) -> str:
         return f"{diff // 86400} days ago"
 
 
-# Hisrory helper
-def load_history() -> list[dict]:
-    if HISTORY_FILE.exists():
+# History helper
+def load_history(file_path: Path | None = None) -> list[dict]:
+    target = file_path or HISTORY_FILE
+    if target.exists():
         try:
-            data = json.loads(HISTORY_FILE.read_text())
+            data = json.loads(target.read_text())
             clean = []
             for item in data:
                 if isinstance(item, str):
@@ -117,49 +85,144 @@ def print_history_table(history: list[dict]):
     print(sep_bot)
 
 
-def save_to_history(new_passwords):
-    history = load_history()
+def save_to_history(new_passwords, file_path: Path | None = None):
+    target = file_path or HISTORY_FILE
+    history = load_history(target)
     history.extend(new_passwords)
     history = history[-MAX_HISTORY:]
-    HISTORY_FILE.write_text(json.dumps(history, indent=2))
-    HISTORY_FILE.chmod(0o600)  # Restrict to owner only
+    target.write_text(json.dumps(history, indent=2))
+    target.chmod(0o600)  # Restrict to owner only
 
 
-if args.clear_history:
-    if HISTORY_FILE.exists():
-        HISTORY_FILE.unlink()
-    print("Password history cleared.")
-    sys.exit(0)
+def build_pool(
+    no_letters: bool = False,
+    no_numbers: bool = False,
+    no_specials: bool = False,
+    no_ambiguous: bool = False,
+) -> str:
+    pool = ""
+    if not no_letters:
+        pool += string.ascii_letters
+    if not no_numbers:
+        pool += string.digits
+    if not no_specials:
+        pool += string.punctuation
 
-if args.history:
-    print_history_table(load_history())
-    sys.exit(0)
+    if no_ambiguous:
+        pool = "".join(c for c in pool if c not in AMBIGUOUS)
+
+    if not pool:
+        raise ValueError(
+            "Error: All character sets are excluded! Can't generate a password."
+        )
+    return pool
 
 
-pool = ""
-if not args.no_letters:
-    pool += string.ascii_letters
-if not args.no_numbers:
-    pool += string.digits
-if not args.no_specials:
-    pool += string.punctuation
+def get_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "-i",
+        "--interactive",
+        action="store_true",
+        help="Interactive click-to-copy mode.",
+    )
+    parser.add_argument(
+        "-l", "--length", type=int, default=16, help="Password length in characters."
+    )
+    parser.add_argument(
+        "-c", "--count", type=int, default=1, help="The number of passwords generated."
+    )
+    parser.add_argument(
+        "-na",
+        "--no-ambiguous",
+        action="store_true",
+        help="Removes ambiguous characters.",
+    )
+    parser.add_argument(
+        "-nn",
+        "--no-numbers",
+        action="store_true",
+        help="Removes numbers from password.",
+    )
+    parser.add_argument(
+        "-nl",
+        "--no-letters",
+        action="store_true",
+        help="Removes letters from password.",
+    )
+    parser.add_argument(
+        "-ns",
+        "--no-specials",
+        action="store_true",
+        help="Removes special characters from password.",
+    )
+    parser.add_argument(
+        "-H",
+        "--history",
+        action="store_true",
+        help=f"Show password history. Max {MAX_HISTORY}.",
+    )
+    parser.add_argument(
+        "--clear-history", action="store_true", help="Clear saved password history."
+    )
+    parser.add_argument(
+        "-m",
+        "--comment",
+        type=str,
+        default="",
+        help="Comment or label for the password.",
+    )
+    return parser
 
-if args.no_ambiguous:
-    pool = "".join(c for c in pool if c not in AMBIGUOUS)
 
-if not pool:
-    raise ValueError(
-        "Error: All character sets are excluded! Can't generate a password."
+def main(argv=None):
+    parser = get_parser()
+    args = parser.parse_args(argv)
+
+    if args.clear_history:
+        if HISTORY_FILE.exists():
+            HISTORY_FILE.unlink()
+        print("Password history cleared.")
+        return 0
+
+    if args.history:
+        history = load_history()
+        if args.interactive:
+            if not history:
+                print("No history found.")
+            else:
+                pick_and_copy(history)
+            return 0
+        print_history_table(history)
+        return 0
+
+    pool = build_pool(
+        no_letters=args.no_letters,
+        no_numbers=args.no_numbers,
+        no_specials=args.no_specials,
+        no_ambiguous=args.no_ambiguous,
     )
 
-current_time = time.time()
-new_records = []
+    current_time = time.time()
+    new_records = []
 
-for _ in range(args.count):
-    password = "".join(secrets.choice(pool) for _ in range(args.length))
-    new_records.append(
-        {"password": password, "timestamp": current_time, "comment": args.comment}
-    )
-    print(password)
+    for _ in range(args.count):
+        password = "".join(secrets.choice(pool) for _ in range(args.length))
+        new_records.append(
+            {"password": password, "timestamp": current_time, "comment": args.comment}
+        )
+        if not args.interactive:
+            print(password)
 
-save_to_history(new_records)
+    save_to_history(new_records)
+
+    if args.interactive:
+        # Pass generated passwords to the picker
+        pick_and_copy([p["password"] for p in new_records])
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+
