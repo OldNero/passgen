@@ -3,6 +3,8 @@ src/passgen/tui.py
 Single-pane dashboard TUI for passgen.
 """
 
+from rich.markup import escape as markup_escape
+
 import secrets
 import string
 import time
@@ -369,7 +371,7 @@ class PasswordRow(Horizontal):
 
     def compose(self) -> ComposeResult:
         yield Label(f"{self.index}", classes="pwd-num")
-        yield Label(self.password,   classes="pwd-text")
+        yield Label(self.password, classes="pwd-text", markup=False)
         yield Static(_strength_markup(self.password), classes="pwd-strength", markup=True)
         yield Label("↵ copy", classes="pwd-hint")
 
@@ -381,7 +383,7 @@ class PasswordRow(Horizontal):
         hint.styles.color = "#22c55e"
         app = self.app
         if hasattr(app, "set_status"):
-            app.set_status(f"✓  Copied to clipboard: {self.password}")
+            app.set_status(f"✓  Copied to clipboard: {markup_escape(self.password)}")
         self.set_timer(2.0, self._reset)
 
     def _reset(self) -> None:
@@ -549,7 +551,7 @@ class PassgenApp(App):
         if row:
             pwd = str(row[1])
             copy_to_clipboard(pwd)
-            self.set_status(f"✓  Copied from history: {pwd}")
+            self.set_status(f"✓  Copied from history: {markup_escape(pwd)}")
 
     # ── Core logic ─────────────────────────────────────────────────────────
 
@@ -602,8 +604,8 @@ class PassgenApp(App):
 
         plural = "password" if count == 1 else "passwords"
         self.set_status(
-            f"Generated {count} {plural}  ·  {length} chars  ·  "
-            "click a row or press Ctrl+C to copy"
+            f"  Generated {count} {plural} · {length} chars · "
+            "click a row or press Ctrl+C to copy  "
         )
 
     def _refresh_history(self) -> None:

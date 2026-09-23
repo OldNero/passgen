@@ -8,6 +8,7 @@ import time
 
 from rich.align import Align
 from rich.console import Console
+from rich.markup import escape as markup_escape
 from rich.panel import Panel
 from rich.rule import Rule
 from rich.table import Table
@@ -91,7 +92,7 @@ def print_passwords(passwords: list[str]) -> None:
     for i, pwd in enumerate(passwords, 1):
         grid.add_row(
             f"[dim]{i}[/dim]",
-            pwd,
+            markup_escape(pwd),
             _strength_bar(pwd),
         )
 
@@ -143,7 +144,7 @@ def print_history_table(history: list[dict]) -> None:
         ts      = item.get("timestamp", 0)
         comment = item.get("comment") or "-"
         t_str   = _format_time_ago(ts)
-        table.add_row(str(i), pwd, _strength_bar(pwd), t_str, comment)
+        table.add_row(str(i), markup_escape(pwd), _strength_bar(pwd), t_str, comment)
 
     console.print()
     console.print(table)
