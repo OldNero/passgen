@@ -1,4 +1,5 @@
 # Passgen uses Python's standard library by default (secrets, string, argparse).
-# If you decide to add external libraries later, you can uncomment or add them below:
+# External dependencies:
 rich>=13.0.0        # For advanced terminal styling, colors, and tables
 pyperclip>=1.8.2    # For automatic clipboard copying
+textual>=0.70.0     # For the full-screen interactive TUI (-i flag)
