@@ -1,38 +1,31 @@
 """
 src/passgen/tui.py
-Full-screen Textual TUI for passgen.
+Single-pane dashboard TUI for passgen.
 """
 
 import secrets
 import string
 import time
-from pathlib import Path
 from typing import ClassVar
 
-from textual import on, work
+from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, ScrollableContainer, Vertical
 from textual.css.query import NoMatches
 from textual.reactive import reactive
-from textual.screen import Screen
 from textual.widgets import (
     Button,
     Checkbox,
     DataTable,
     Footer,
-    Header,
     Input,
     Label,
-    RichLog,
     Static,
-    TabbedContent,
-    TabPane,
 )
 
 try:
     from passgen.core import (
-        AMBIGUOUS,
         HISTORY_FILE,
         MAX_HISTORY,
         build_pool,
@@ -43,7 +36,6 @@ try:
     )
 except ModuleNotFoundError:
     from core import (  # type: ignore
-        AMBIGUOUS,
         HISTORY_FILE,
         MAX_HISTORY,
         build_pool,
@@ -59,95 +51,129 @@ except ModuleNotFoundError:
     from picker import copy_to_clipboard  # type: ignore
 
 
+# ── Strength helpers ──────────────────────────────────────────────────────────
+
+_STRENGTH_COLORS = ["red", "dark_orange", "yellow", "green", "bright_green"]
+_STRENGTH_LABELS = ["Very Weak", "Weak",    "Fair",   "Strong", "Very Strong"]
+
+
+def _strength_score(pwd: str) -> int:
+    classes = sum([
+        any(c in string.ascii_lowercase for c in pwd),
+        any(c in string.ascii_uppercase for c in pwd),
+        any(c in string.digits          for c in pwd),
+        any(c in string.punctuation     for c in pwd),
+    ])
+    if len(pwd) < 8:
+        classes = max(0, classes - 1)
+    return classes
+
+
+def _strength_markup(pwd: str) -> str:
+    score  = _strength_score(pwd)
+    color  = _STRENGTH_COLORS[score]
+    label  = _STRENGTH_LABELS[score]
+    filled = "█" * (score + 1) * 2
+    empty  = "░" * (4 - score) * 2
+    return f"[{color}]{filled}{empty}[/{color}] [{color} bold]{label}[/{color} bold]"
+
+
 # ── CSS ───────────────────────────────────────────────────────────────────────
+
 CSS = """
+/* ── Root ─────────────────────────────────────────────── */
 Screen {
-    background: #0d0d14;
+    background: #0b0b12;
+    layers: base overlay;
 }
 
-/* ── Header / Footer ─────────────────────────────────── */
-Header {
-    background: #0d0d14;
-    color: #7ee8fa;
-    text-style: bold;
-    height: 3;
-}
-
-Footer {
-    background: #12121f;
-    color: #555577;
-}
-
-/* ── Layout containers ───────────────────────────────── */
-#layout {
-    layout: horizontal;
+/* ── Dashboard wrapper ────────────────────────────────── */
+#dashboard {
     height: 1fr;
+    padding: 0 2 1 2;
+}
+
+/* ── Branded header bar ────────────────────────────────── */
+#brand-bar {
+    height: 3;
+    background: #0b0b12;
     padding: 0 1;
+    dock: top;
 }
 
-#left-panel {
-    width: 32;
-    min-width: 28;
-    padding: 0 1 1 1;
-    background: #12121f;
-    border: solid #1e1e35;
-    border-title-color: #7ee8fa;
-    border-title-style: bold;
-}
-
-#right-panel {
+#brand-title {
     width: 1fr;
-    padding: 0 1 1 1;
-    background: #0d0d14;
-    border: solid #1e1e35;
-    border-title-color: #a78bfa;
-    border-title-style: bold;
-    margin-left: 1;
-}
-
-/* ── Controls (left panel) ───────────────────────────── */
-.section-label {
     color: #7ee8fa;
     text-style: bold;
-    margin-top: 1;
-    margin-bottom: 0;
+    padding: 1 0;
+    content-align: left middle;
 }
 
-.sub-label {
-    color: #555577;
-    margin-bottom: 0;
+#brand-subtitle {
+    width: auto;
+    color: #2a2a45;
+    padding: 1 0;
+    content-align: right middle;
 }
 
-.length-row {
-    layout: horizontal;
+/* ── Section panels ───────────────────────────────────── */
+.section {
+    border: solid #1e1e35;
+    background: #10101c;
+    padding: 0 1 1 1;
+    margin-bottom: 1;
+}
+
+.section-title {
+    color: #5a5a80;
+    text-style: bold;
+    padding: 0;
+    margin-bottom: 1;
+    border-bottom: solid #1e1e35;
+    width: 1fr;
+    padding-bottom: 0;
+}
+
+/* ── Controls section ─────────────────────────────────── */
+#controls-section {
+    height: auto;
+}
+
+#controls-row-1 {
     height: 3;
-    margin-top: 0;
-    margin-bottom: 0;
+    margin-bottom: 1;
+}
+
+#controls-row-2 {
+    height: 3;
+}
+
+.ctrl-label {
+    width: auto;
+    color: #4a4a70;
+    text-style: bold;
+    padding: 1 1 0 0;
+    content-align: left middle;
 }
 
 #length-input {
     width: 6;
-    border: solid #2a2a45;
-    background: #0d0d14;
+    border: solid #1e1e35;
+    background: #0b0b12;
     color: #e2e8ff;
+    margin-right: 2;
 }
 
 #length-input:focus {
     border: solid #7ee8fa;
 }
 
-#length-display {
-    width: 1fr;
-    padding: 1 1;
-    color: #555577;
-    text-align: right;
-}
-
 #count-input {
-    width: 6;
-    border: solid #2a2a45;
-    background: #0d0d14;
+    width: 5;
+    border: solid #1e1e35;
+    background: #0b0b12;
     color: #e2e8ff;
+    margin-right: 2;
 }
 
 #count-input:focus {
@@ -156,10 +182,9 @@ Footer {
 
 #comment-input {
     width: 1fr;
-    border: solid #2a2a45;
-    background: #0d0d14;
+    border: solid #1e1e35;
+    background: #0b0b12;
     color: #e2e8ff;
-    margin-top: 0;
 }
 
 #comment-input:focus {
@@ -169,130 +194,132 @@ Footer {
 Checkbox {
     background: transparent;
     border: none;
-    padding: 0;
+    padding: 0 1 0 0;
     margin: 0;
-    color: #a0aabb;
+    color: #3a3a58;
+    height: 3;
 }
 
-Checkbox:hover {
-    color: #e2e8ff;
-    background: #1e1e35;
-}
+Checkbox:hover { color: #7ee8fa; }
+Checkbox.-on   { color: #a78bfa; }
 
-Checkbox.-on {
-    color: #7ee8fa;
-}
-
-/* ── Buttons ─────────────────────────────────────────── */
 #generate-btn {
-    margin-top: 1;
-    width: 1fr;
+    width: 20;
     background: #7ee8fa;
-    color: #0d0d14;
+    color: #0b0b12;
     border: none;
     text-style: bold;
+    margin-right: 1;
 }
 
-#generate-btn:hover {
-    background: #a78bfa;
-    color: #0d0d14;
+#generate-btn:hover  { background: #a78bfa; }
+#generate-btn:focus  { background: #a78bfa; }
+
+#copy-all-btn {
+    width: 18;
+    background: #1e1e35;
+    color: #7ee8fa;
+    border: solid #2a2a50;
+    text-style: bold;
+    margin-right: 1;
 }
 
-#generate-btn:focus {
-    background: #a78bfa;
-}
+#copy-all-btn:hover  { background: #2a2a50; }
 
 #clear-hist-btn {
-    margin-top: 1;
-    width: 1fr;
+    width: 18;
     background: #1e1e35;
     color: #ff6b6b;
-    border: solid #ff6b6b;
+    border: solid #2a2a35;
     text-style: bold;
 }
 
-#clear-hist-btn:hover {
-    background: #ff6b6b;
-    color: #0d0d14;
-}
+#clear-hist-btn:hover { background: #ff6b6b; color: #0b0b12; }
 
-/* ── Tabs ────────────────────────────────────────────── */
-TabbedContent {
+/* ── Results section ──────────────────────────────────── */
+#results-section {
     height: 1fr;
+    min-height: 8;
 }
 
-TabPane {
-    padding: 1 0 0 0;
-    background: #0d0d14;
-}
-
-/* ── Password result list ────────────────────────────── */
 #results-scroll {
     height: 1fr;
-    background: #0d0d14;
+    background: transparent;
 }
 
+#results-empty {
+    height: 1fr;
+    color: #2a2a45;
+    text-style: italic;
+    content-align: center middle;
+}
+
+/* ── Password row ─────────────────────────────────────── */
 .pwd-row {
-    layout: horizontal;
     height: 3;
     padding: 0 1;
-    margin-bottom: 1;
-    background: #12121f;
-    border: solid #1e1e35;
-    border-left: solid #2a2a45 3;
+    margin-bottom: 0;
+    background: #13131f;
+    border-left: tall #2a2a45;
 }
 
 .pwd-row:hover {
-    border-left: solid #7ee8fa 3;
     background: #1a1a2e;
+    border-left: tall #7ee8fa;
 }
 
 .pwd-row.-copied {
-    border-left: solid #22c55e 3;
-    background: #0f2620;
+    background: #0d2010;
+    border-left: tall #22c55e;
 }
 
-.pwd-idx {
+.pwd-num {
     width: 4;
-    padding: 1 1;
-    color: #3a3a55;
+    color: #2a2a45;
     text-style: bold;
+    content-align: left middle;
+    padding: 1 0;
 }
 
 .pwd-text {
     width: 1fr;
-    padding: 1 0;
     color: #e2e8ff;
     text-style: bold;
+    content-align: left middle;
+    padding: 1 0;
 }
 
 .pwd-strength {
-    width: 20;
+    width: 22;
+    content-align: right middle;
     padding: 1 1;
-    text-align: right;
 }
 
-.pwd-copy-hint {
-    width: 16;
+.pwd-hint {
+    width: 14;
+    color: #2a2a45;
+    content-align: right middle;
     padding: 1 0;
-    color: #3a3a55;
-    text-align: right;
 }
 
-/* ── History DataTable ───────────────────────────────── */
+/* ── History section ──────────────────────────────────── */
+#history-section {
+    height: 10;
+}
+
 #history-table {
     height: 1fr;
-    background: #0d0d14;
+    background: transparent;
 }
 
 DataTable {
-    background: #0d0d14;
-    border: solid #1e1e35;
+    background: transparent;
+    border: none;
 }
 
 DataTable > .datatable--header {
-    background: #12121f;
-    color: #a78bfa;
+    background: #10101c;
+    color: #5a5a80;
     text-style: bold;
 }
 
@@ -302,164 +329,82 @@ DataTable > .datatable--cursor {
 }
 
 DataTable > .datatable--hover {
-    background: #1a1a2e;
+    background: #16162a;
 }
 
-/* ── Status bar ──────────────────────────────────────── */
-#status-bar {
+/* ── Action row ───────────────────────────────────────── */
+#action-row {
+    height: 3;
+    margin-top: 0;
+    padding: 0;
+}
+
+/* ── Status strip ─────────────────────────────────────── */
+#status-strip {
     height: 1;
-    background: #12121f;
+    background: #0b0b12;
     padding: 0 2;
-    color: #555577;
+    color: #3a3a58;
     dock: bottom;
+    offset-y: -1;
 }
 
-/* ── Empty state ──────────────────────────────────────── */
-#empty-state {
-    height: 1fr;
-    content-align: center middle;
-    color: #2a2a45;
-    text-style: italic;
+/* ── Footer ───────────────────────────────────────────── */
+Footer {
+    background: #0d0d18;
+    color: #3a3a58;
 }
 """
 
 
-# ── Strength helpers ──────────────────────────────────────────────────────────
+# ── Password row widget ───────────────────────────────────────────────────────
 
-_STRENGTH_COLORS = ["red", "dark_orange", "yellow", "green", "bright_green"]
-_STRENGTH_LABELS = ["Very Weak", "Weak", "Fair", "Strong", "Very Strong"]
-
-
-def _strength_score(pwd: str) -> int:
-    classes = 0
-    if any(c in string.ascii_lowercase for c in pwd):
-        classes += 1
-    if any(c in string.ascii_uppercase for c in pwd):
-        classes += 1
-    if any(c in string.digits for c in pwd):
-        classes += 1
-    if any(c in string.punctuation for c in pwd):
-        classes += 1
-    if len(pwd) < 8:
-        classes = max(0, classes - 1)
-    return classes
-
-
-def _strength_markup(pwd: str) -> str:
-    score = _strength_score(pwd)
-    color = _STRENGTH_COLORS[score]
-    label = _STRENGTH_LABELS[score]
-    bar = "█" * (score + 1) + "░" * (4 - score)
-    return f"[{color}]{bar} {label}[/{color}]"
-
-
-# ── Password Row widget ───────────────────────────────────────────────────────
-
-class PasswordRow(Static):
-    """A single password row that can be clicked to copy."""
-
-    DEFAULT_CSS = ""
+class PasswordRow(Horizontal):
+    """Clickable password row with strength indicator."""
 
     def __init__(self, index: int, password: str, **kwargs):
-        super().__init__(**kwargs)
-        self.index = index
+        super().__init__(**kwargs, classes="pwd-row")
+        self.index    = index
         self.password = password
-        self._copied = False
 
     def compose(self) -> ComposeResult:
-        yield Label(f"{self.index}", classes="pwd-idx")
-        yield Label(self.password, classes="pwd-text")
+        yield Label(f"{self.index}", classes="pwd-num")
+        yield Label(self.password,   classes="pwd-text")
         yield Static(_strength_markup(self.password), classes="pwd-strength", markup=True)
-        yield Label("click to copy", classes="pwd-copy-hint")
+        yield Label("↵ copy", classes="pwd-hint")
 
     def on_click(self) -> None:
         copy_to_clipboard(self.password)
-        self._copied = True
         self.add_class("-copied")
-        copy_label = self.query_one(".pwd-copy-hint", Label)
-        copy_label.update("✓ Copied!")
-        copy_label.styles.color = "#22c55e"
-        self.app.set_status(f"✓ Copied: {self.password}")
-        # Reset after 2 seconds
-        self.set_timer(2.0, self._reset_copied)
+        hint = self.query_one(".pwd-hint", Label)
+        hint.update("✓ Copied!")
+        hint.styles.color = "#22c55e"
+        app = self.app
+        if hasattr(app, "set_status"):
+            app.set_status(f"✓  Copied to clipboard: {self.password}")
+        self.set_timer(2.0, self._reset)
 
-    def _reset_copied(self) -> None:
-        self._copied = False
+    def _reset(self) -> None:
         self.remove_class("-copied")
-        copy_label = self.query_one(".pwd-copy-hint", Label)
-        copy_label.update("click to copy")
-        copy_label.styles.color = None
+        hint = self.query_one(".pwd-hint", Label)
+        hint.update("↵ copy")
+        hint.styles.color = None
 
 
-# ── History tab ───────────────────────────────────────────────────────────────
-
-class HistoryTab(Vertical):
-    """History tab content."""
-
-    def compose(self) -> ComposeResult:
-        yield DataTable(id="history-table", cursor_type="row")
-        yield Button("🗑  Clear History", id="clear-hist-btn")
-
-    def on_mount(self) -> None:
-        self.refresh_table()
-
-    def refresh_table(self) -> None:
-        table = self.query_one(DataTable)
-        table.clear(columns=True)
-        table.add_columns("#", "Password", "Strength", "Created", "Comment")
-        history = load_history()
-        if not history:
-            return
-        for i, item in enumerate(history, 1):
-            pwd     = item.get("password", "")
-            ts      = item.get("timestamp", 0)
-            comment = item.get("comment") or "-"
-            score   = _strength_score(pwd)
-            color   = _STRENGTH_COLORS[score]
-            label   = _STRENGTH_LABELS[score]
-            bar     = "█" * (score + 1) + "░" * (4 - score)
-            table.add_row(
-                str(i),
-                pwd,
-                f"{bar} {label}",
-                format_time_ago(ts),
-                comment,
-                key=str(i),
-            )
-
-    @on(DataTable.RowSelected, "#history-table")
-    def on_row_selected(self, event: DataTable.RowSelected) -> None:
-        table = self.query_one(DataTable)
-        row_vals = table.get_row(event.row_key)
-        if row_vals:
-            pwd = str(row_vals[1])
-            copy_to_clipboard(pwd)
-            self.app.set_status(f"✓ Copied from history: {pwd}")
-
-    @on(Button.Pressed, "#clear-hist-btn")
-    def on_clear(self) -> None:
-        if HISTORY_FILE.exists():
-            HISTORY_FILE.unlink()
-        self.refresh_table()
-        self.app.set_status("Password history cleared.")
-
-
-# ── Main TUI App ──────────────────────────────────────────────────────────────
+# ── Main app ──────────────────────────────────────────────────────────────────
 
 class PassgenApp(App):
-    """Passgen — Modern Terminal Password Generator."""
+    """Passgen — single-pane dashboard."""
 
-    CSS = CSS
+    CSS   = CSS
     TITLE = "Passgen"
-    SUB_TITLE = "Secure Password Generator"
 
     BINDINGS: ClassVar[list[Binding]] = [
-        Binding("g",      "generate",  "Generate",       show=True),
-        Binding("ctrl+h", "show_history", "History",     show=True),
-        Binding("q",      "quit",      "Quit",           show=True),
+        Binding("g",      "generate",  "Generate",  show=True),
+        Binding("ctrl+c", "copy_top",  "Copy Top",  show=True),
+        Binding("r",      "regenerate","Regenerate", show=True),
+        Binding("q",      "quit",      "Quit",       show=True),
     ]
-
-    _passwords: reactive[list[str]] = reactive([], recompose=False)
 
     def __init__(
         self,
@@ -480,121 +425,135 @@ class PassgenApp(App):
         self._init_no_specials  = no_specials
         self._init_no_ambiguous = no_ambiguous
         self._init_comment      = comment
+        self._last_passwords: list[str] = []
 
-    # ── Layout ──────────────────────────────────────────────────────────────
+    # ── Layout ─────────────────────────────────────────────────────────────
 
     def compose(self) -> ComposeResult:
-        yield Header()
 
-        with Horizontal(id="layout"):
-            # ── Left: controls ──────────────────────────────────────────
-            with Vertical(id="left-panel"):
-                yield Label("LENGTH", classes="section-label")
-                with Horizontal(classes="length-row"):
+        # ── Top brand bar ────────────────────────────────────────────────
+        with Horizontal(id="brand-bar"):
+            yield Label("⚿  PASSGEN", id="brand-title")
+            yield Label("secure · fast · open source", id="brand-subtitle")
+
+        # ── Main scrollable dashboard ────────────────────────────────────
+        with ScrollableContainer(id="dashboard"):
+
+            # Controls ────────────────────────────────────────────────────
+            with Vertical(id="controls-section", classes="section"):
+                yield Label(" SETTINGS", classes="section-title")
+
+                # Row 1: Length / Count / Comment
+                with Horizontal(id="controls-row-1"):
+                    yield Label("Length", classes="ctrl-label")
                     yield Input(
                         value=str(self._init_length),
                         id="length-input",
-                        type="integer",
                         restrict=r"[0-9]*",
                     )
-                    yield Label(
-                        f"{self._init_length} chars",
-                        id="length-display",
-                    )
-
-                yield Label("COUNT", classes="section-label")
-                with Horizontal(classes="length-row"):
+                    yield Label("Count", classes="ctrl-label")
                     yield Input(
                         value=str(self._init_count),
                         id="count-input",
-                        type="integer",
                         restrict=r"[0-9]*",
                     )
-                    yield Label("passwords", id="count-display", classes="sub-label")
+                    yield Label("Label", classes="ctrl-label")
+                    yield Input(
+                        value=self._init_comment,
+                        placeholder="optional comment…",
+                        id="comment-input",
+                    )
 
-                yield Label("EXCLUDE", classes="section-label")
-                yield Checkbox(
-                    "No Numbers",
-                    value=self._init_no_numbers,
-                    id="cb-no-numbers",
-                )
-                yield Checkbox(
-                    "No Letters",
-                    value=self._init_no_letters,
-                    id="cb-no-letters",
-                )
-                yield Checkbox(
-                    "No Specials",
-                    value=self._init_no_specials,
-                    id="cb-no-specials",
-                )
-                yield Checkbox(
-                    "No Ambiguous",
-                    value=self._init_no_ambiguous,
-                    id="cb-no-ambiguous",
-                )
+                # Row 2: Exclusion toggles
+                with Horizontal(id="controls-row-2"):
+                    yield Checkbox("No Numbers",   value=self._init_no_numbers,   id="cb-nn")
+                    yield Checkbox("No Letters",   value=self._init_no_letters,   id="cb-nl")
+                    yield Checkbox("No Specials",  value=self._init_no_specials,  id="cb-ns")
+                    yield Checkbox("No Ambiguous", value=self._init_no_ambiguous, id="cb-na")
 
-                yield Label("COMMENT / LABEL", classes="section-label")
-                yield Input(
-                    value=self._init_comment,
-                    placeholder="optional label…",
-                    id="comment-input",
-                )
+            # Results ─────────────────────────────────────────────────────
+            with Vertical(id="results-section", classes="section"):
+                yield Label(" PASSWORDS", classes="section-title")
+                with ScrollableContainer(id="results-scroll"):
+                    yield Static(
+                        "Press [bold cyan]G[/bold cyan] to generate passwords.",
+                        id="results-empty",
+                        markup=True,
+                    )
 
-                yield Button("⚿  Generate", id="generate-btn", variant="primary")
+            # History ─────────────────────────────────────────────────────
+            with Vertical(id="history-section", classes="section"):
+                yield Label(" RECENT HISTORY", classes="section-title")
+                yield DataTable(id="history-table", cursor_type="row", show_cursor=True)
 
-            # ── Right: results + history ────────────────────────────────
-            with Vertical(id="right-panel"):
-                with TabbedContent("Results", "History", id="tabs"):
-                    with TabPane("Results", id="tab-results"):
-                        with ScrollableContainer(id="results-scroll"):
-                            yield Static(
-                                "Press [bold cyan]G[/bold cyan] or click "
-                                "[bold cyan]Generate[/bold cyan] to create passwords.",
-                                id="empty-state",
-                                markup=True,
-                            )
+            # Action row ──────────────────────────────────────────────────
+            with Horizontal(id="action-row"):
+                yield Button("⚿  Generate",      id="generate-btn",  variant="primary")
+                yield Button("⎘  Copy All",       id="copy-all-btn")
+                yield Button("🗑  Clear History",  id="clear-hist-btn")
 
-                    with TabPane("History", id="tab-history"):
-                        yield HistoryTab(id="history-tab")
-
-        yield Static("", id="status-bar")
+        yield Static("", id="status-strip")
         yield Footer()
 
-    # ── Actions ──────────────────────────────────────────────────────────────
+    def on_mount(self) -> None:
+        self._refresh_history()
+        self.query_one("#length-input").focus()
+
+    # ── Actions ────────────────────────────────────────────────────────────
 
     def action_generate(self) -> None:
-        self.query_one("#generate-btn", Button).press()
-
-    def action_show_history(self) -> None:
-        tabs = self.query_one(TabbedContent)
-        tabs.active = "tab-history"
-        # Refresh the history table
-        try:
-            self.query_one(HistoryTab).refresh_table()
-        except NoMatches:
-            pass
-
-    def set_status(self, message: str) -> None:
-        try:
-            self.query_one("#status-bar", Static).update(message)
-        except NoMatches:
-            pass
-
-    # ── Event handlers ────────────────────────────────────────────────────────
-
-    @on(Input.Changed, "#length-input")
-    def on_length_changed(self, event: Input.Changed) -> None:
-        val = event.value.strip()
-        if val.isdigit():
-            self.query_one("#length-display", Label).update(f"{val} chars")
-
-    @on(Button.Pressed, "#generate-btn")
-    def on_generate(self, event: Button.Pressed) -> None:
         self._do_generate()
 
+    def action_copy_top(self) -> None:
+        if self._last_passwords:
+            copy_to_clipboard(self._last_passwords[0])
+            self.set_status(f"✓  Copied: {self._last_passwords[0]}")
+
+    def action_regenerate(self) -> None:
+        self._do_generate()
+
+    # ── Status helper ──────────────────────────────────────────────────────
+
+    def set_status(self, msg: str) -> None:
+        try:
+            self.query_one("#status-strip", Static).update(msg)
+        except NoMatches:
+            pass
+
+    # ── Event handlers ─────────────────────────────────────────────────────
+
+    @on(Button.Pressed, "#generate-btn")
+    def on_generate(self) -> None:
+        self._do_generate()
+
+    @on(Button.Pressed, "#copy-all-btn")
+    def on_copy_all(self) -> None:
+        if not self._last_passwords:
+            self.set_status("Nothing to copy — generate some passwords first.")
+            return
+        combined = "\n".join(self._last_passwords)
+        copy_to_clipboard(combined)
+        self.set_status(f"✓  Copied all {len(self._last_passwords)} passwords to clipboard.")
+
+    @on(Button.Pressed, "#clear-hist-btn")
+    def on_clear_history(self) -> None:
+        if HISTORY_FILE.exists():
+            HISTORY_FILE.unlink()
+        self._refresh_history()
+        self.set_status("History cleared.")
+
+    @on(DataTable.RowSelected, "#history-table")
+    def on_history_row_selected(self, event: DataTable.RowSelected) -> None:
+        table = self.query_one("#history-table", DataTable)
+        row   = table.get_row(event.row_key)
+        if row:
+            pwd = str(row[1])
+            copy_to_clipboard(pwd)
+            self.set_status(f"✓  Copied from history: {pwd}")
+
+    # ── Core logic ─────────────────────────────────────────────────────────
+
     def _do_generate(self) -> None:
-        # Read controls
         length_val  = self.query_one("#length-input",  Input).value.strip()
         count_val   = self.query_one("#count-input",   Input).value.strip()
         comment_val = self.query_one("#comment-input", Input).value.strip()
@@ -609,52 +568,59 @@ class PassgenApp(App):
         except ValueError:
             count = 1
 
-        no_numbers   = self.query_one("#cb-no-numbers",   Checkbox).value
-        no_letters   = self.query_one("#cb-no-letters",   Checkbox).value
-        no_specials  = self.query_one("#cb-no-specials",  Checkbox).value
-        no_ambiguous = self.query_one("#cb-no-ambiguous", Checkbox).value
+        no_numbers   = self.query_one("#cb-nn", Checkbox).value
+        no_letters   = self.query_one("#cb-nl", Checkbox).value
+        no_specials  = self.query_one("#cb-ns", Checkbox).value
+        no_ambiguous = self.query_one("#cb-na", Checkbox).value
 
-        # Build pool
         try:
-            pool = build_pool(
+            records = generate_passwords(
+                count=count,
+                length=length,
                 no_letters=no_letters,
                 no_numbers=no_numbers,
                 no_specials=no_specials,
                 no_ambiguous=no_ambiguous,
+                comment=comment_val,
             )
         except ValueError as e:
-            self.set_status(str(e))
+            self.set_status(f"✗  {e}")
             return
 
-        # Generate
-        now = time.time()
-        passwords = [
-            "".join(secrets.choice(pool) for _ in range(length))
-            for _ in range(count)
-        ]
-
-        # Save to history
-        records = [
-            {"password": p, "timestamp": now, "comment": comment_val}
-            for p in passwords
-        ]
         save_to_history(records)
+        passwords = [r["password"] for r in records]
+        self._last_passwords = passwords
 
-        # Update results pane
+        # Rebuild results pane
         scroll = self.query_one("#results-scroll", ScrollableContainer)
         scroll.remove_children()
-
         for i, pwd in enumerate(passwords, 1):
-            scroll.mount(PasswordRow(i, pwd, classes="pwd-row"))
+            scroll.mount(PasswordRow(i, pwd))
 
-        # Switch to results tab
-        self.query_one(TabbedContent).active = "tab-results"
+        # Refresh history strip
+        self._refresh_history()
 
         plural = "password" if count == 1 else "passwords"
         self.set_status(
-            f"Generated {count} {plural}  ·  length {length}  ·  "
-            f"click any password to copy"
+            f"Generated {count} {plural}  ·  {length} chars  ·  "
+            "click a row or press Ctrl+C to copy"
         )
+
+    def _refresh_history(self) -> None:
+        table   = self.query_one("#history-table", DataTable)
+        history = load_history()
+
+        table.clear(columns=True)
+        table.add_columns("#", "Password", "Strength", "Created", "Comment")
+
+        for i, item in enumerate(history, 1):
+            pwd     = item.get("password", "")
+            ts      = item.get("timestamp", 0)
+            comment = item.get("comment") or "-"
+            score   = _strength_score(pwd)
+            bar     = "█" * (score + 1) * 2 + "░" * (4 - score) * 2
+            label   = _STRENGTH_LABELS[score]
+            table.add_row(str(i), pwd, f"{bar} {label}", format_time_ago(ts), comment)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -668,8 +634,7 @@ def run_tui(
     no_ambiguous: bool = False,
     comment:      str  = "",
 ) -> None:
-    """Launch the Textual TUI with initial settings from CLI args."""
-    app = PassgenApp(
+    PassgenApp(
         length=length,
         count=count,
         no_numbers=no_numbers,
@@ -677,5 +642,4 @@ def run_tui(
         no_specials=no_specials,
         no_ambiguous=no_ambiguous,
         comment=comment,
-    )
-    app.run()
+    ).run()
